@@ -1,70 +1,78 @@
-parameters:
-  - name: 'vmImage'
-    default: 'ubuntu-latest'
-    type: string
-  - name: 'sdkVersion'
-    default: '3.x'
-    type: string
-  - name: 'projectsPath'
-    default: '**/**/*.sln'
-    type: string
-  - name: 'testProjectsPath'
-    default: '**/*Tests/*.csproj'
-    type: string
-  - name: 'buildConfiguration'
-    default: 'Release'
-    type: string
-  - name: 'styleCopEnabled'
-    default: 'true'
-    type: string
+trigger:
+  branches:
+    include:
+      - main
 
-jobs:
-- job: Build
-  pool:
-    vmImage: ${{ parameters.vmImage }}
-  steps:
-  - task: UseDotNet@2
-    displayName: 'Dotnet Install'
-    inputs:
-      packageType: 'sdk'
-      version: ${{ parameters.sdkVersion }}
+pr:
+  drafts: false
+  branches:
+    include:
+      - main
 
-  - task: DotNetCoreCLI@2
-    displayName: 'Dotnet Build'
-    inputs:
-      command: 'build'
-      projects: ${{ parameters.projectsPath }}
-      arguments: '--configuration ${{ parameters.buildConfiguration }} --output $(Build.ArtifactStagingDirectory) /p:TreatWarningsAsErrors=${{ parameters.styleCopEnabled }}'
-  
-  - task: DotNetCoreCLI@2
-    displayName: 'Dotnet Test'
-    inputs:
-      command: 'test'
-      projects: ${{ parameters.testProjectsPath }}
+variables:
+  vmImageName: 'ubuntu-latest'
 
-  - task: DotNetCoreCLI@2
-    displayName: 'Dotnet Publish'
-    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
-    inputs:
-      command: 'publish'
-      publishWebProjects: false
-      arguments: '--configuration ${{ parameters.buildConfiguration }}'
-      zipAfterPublish: false
+stages:
+- stage: Build
+  displayName: Build stage
+  jobs:
+  - job: Build
+    displayName: Building
+    pool:
+      vmImage: $(vmImageName)
 
-  - task: ArchiveFiles@2
-    displayName: 'Archive Files'
-    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
-    inputs:
-      rootFolderOrFile: '$(Build.ArtifactStagingDirectory)'
-      includeRootFolder: false
-      archiveType: zip
-      archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
-      replaceExistingArchive: true
+    steps:
+      - script: npm ci
+        displayName: 'Installing Dependencies'
 
-  - task: PublishBuildArtifacts@1
-    displayName: 'Drop Artifact'
-    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
-    inputs:
-      PathtoPublish: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
-      ArtifactName: 'drop'
-      publishLocation: 'Container'
+      - script: npm test -- --ci --watchAll=false --passWithNoTests
+        displayName: 'Running Unit Test'
+
+      - script: npm run build
+        displayName: 'Building React webApp'
+
+      - task: ArchiveFiles@2
+        displayName: 'Zipping files'
+        condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+        inputs:
+          rootFolderOrFile: '$(System.DefaultWorkingDirectory)/build'
+          includeRootFolder: false
+          archiveType: zip
+          archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+          replaceExistingArchive: true
+
+      - upload: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+        displayName: Publishing
+        condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+        artifact: drop
+
+- stage: Deploy
+  displayName: Deploy stage
+  dependsOn: Build
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+  jobs:
+  - deployment: Deploy
+    displayName: Deploying
+    environment: $(envName)
+    pool:
+      vmImage: $(vmImageName)
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebApp@1
+            displayName: Deploying
+            inputs:
+              appName: 'alexup-dev' 
+              azureSubscription: 'AlexUp (68417a70-80ac-4db7-b7a2-46959c7bdf82)'
+              appType: 'webAppLinux'
+              package: '$(Pipeline.Workspace)/drop/$(Build.BuildId).zip'
+              runtimeStack: 'NODE|14-lts'
+              startUpCommand: 'npm install -g serve && serve -n -l 8080'
+    
+          - task: CmdLine@2
+            displayName: 'Request to WebApp'
+            inputs:
+              script: |
+                response=$(curl --write-out '%{http_code}' --silent --output /dev/null http://app-tuweb-$(envName)-bra.azurewebsites.net)
+                echo HTTP code: $response
