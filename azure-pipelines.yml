@@ -25,9 +25,6 @@ stages:
       - script: npm ci
         displayName: 'Installing Dependencies'
 
-      - script: npm test -- --ci --watchAll=false --passWithNoTests
-        displayName: 'Running Unit Test'
-
       - script: npm run build
         displayName: 'Building React webApp'
 
