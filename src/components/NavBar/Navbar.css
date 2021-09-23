@@ -1,0 +1,14 @@
+.Navbar{
+    align-items: center;
+}
+.navbar-content{
+    display: flex;
+    justify-content: center;
+    width: 100%;
+}
+
+.nav-link{
+    margin: 20px;
+    text-decoration: none;
+    color: white;
+}
